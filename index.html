@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>jsdemo — All Releases</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="./latest/cover.png" type="image/png">
+<style>
+  body{font:16px/1.5 system-ui,Segoe UI,Roboto,Arial;margin:2rem;max-width:920px}
+  header{display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+  input{font:inherit;padding:.5rem .75rem;border:1px solid #ddd;border-radius:.5rem;min-width:280px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;margin-top:1rem}
+  .card{border:1px solid #e5e5e5;border-radius:.75rem;padding:1rem}
+  .card h3{margin:.25rem 0 .25rem;font-size:1.1rem}
+  .meta{color:#666;font-size:.9rem;margin-top:.15rem}
+  .meta a{color:inherit;text-decoration:underline dotted}
+  .cover{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:.5rem;border:1px solid #eee;margin:.5rem 0;display:block}
+  .desc{color:#555;font-size:.92rem;margin-top:.35rem}
+  .muted{color:#888;font-size:.95rem}
+</style>
+</head>
+<body>
+<header>
+  <h1 style="margin:0">jsdemo</h1>
+  <a href="./latest/" style="margin-left:auto">Latest</a>
+  <input id="q" placeholder="Search by date (YYYYMMDD), year/month, #seq or text">
+</header>
+<p class="muted">Click the cover to open the demo. In the meta line, <b>Date</b> and <b>Seq</b> are links.</p>
+<div id="list" class="grid"></div>
+<script>
+async function load(){
+  let base = [];
+  try {
+    const res = await fetch('./releases/manifest.json', {cache:'no-store'});
+    if(!res.ok) throw new Error('manifest not found');
+    base = await res.json();
+  } catch (e) {
+    console.error('Failed to load manifest:', e);
+    base = [];
+  }
+
+  const list = document.getElementById('list');
+  const q = document.getElementById('q');
+
+  function esc(s){
+    const map = { "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" };
+    return String(s||"").replace(/[&<>"']/g, m => map[m]);
+  }
+
+  function render(items){
+    list.innerHTML = '';
+    for (const it of items) {
+      const el = document.createElement('div'); el.className='card';
+      el.innerHTML = `
+        <a href="./releases/date/${it.date}/" target="_blank">
+          <img class="cover" src="./releases/date/${it.date}/cover.png" alt="open ${esc(it.title||'demo')}">
+        </a>
+        <h3>${esc(it.seq)}: ${esc(it.title||'Untitled')}</h3>
+        <div class="meta">
+          Date: <a href="./releases/date/${it.date}/" target="_blank"><code>${it.date}</code></a>
+          ·
+          Seq: <a href="./releases/seq/${it.seq}/" target="_blank"><code>${it.seq}</code></a>
+        </div>
+        <p class="desc">${esc((it.desc||'').trim())}</p>`;
+      list.appendChild(el);
+    }
+  }
+
+  // Simple 3-bucket ranking: exact seq, starts-with, contains
+  function searchRanked(qs){
+    qs = (qs||'').trim().toLowerCase();
+    if(!qs) return base;
+
+    const exact=[], starts=[], contains=[];
+    for(const it of base){
+      const seqStr = String(it.seq).toLowerCase();
+      const date   = String(it.date).toLowerCase();
+      const title  = String(it.title||'').toLowerCase();
+      const desc   = String(it.desc||'').toLowerCase();
+
+      const startsAny   = date.startsWith(qs) || seqStr.startsWith(qs) || title.startsWith(qs) || desc.startsWith(qs);
+      const containsAny = date.includes(qs)   || seqStr.includes(qs)   || title.includes(qs)   || desc.includes(qs);
+
+      if(qs === seqStr) { exact.push(it); continue; }
+      if(startsAny)     { starts.push(it); continue; }
+      if(containsAny)   { contains.push(it); continue; }
+    }
+
+    const order = new Map(base.map((x,i)=>[x.date+':'+x.seq, i]));
+    const byBase = arr => arr.sort((a,b)=> order.get(a.date+':'+a.seq) - order.get(b.date+':'+b.seq));
+    return [...byBase(exact), ...byBase(starts), ...byBase(contains)];
+  }
+
+  q.addEventListener('input', () => render(searchRanked(q.value)));
+  render(base);
+}
+load();
+</script>
+</body>
+</html>
