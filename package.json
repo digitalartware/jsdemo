@@ -1,0 +1,12 @@
+{
+  "name": "jsdemo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "generate": "node scripts/generate_release.mjs",
+    "cover": "python3 scripts/make_cover.py",
+    "update-pages": "python3 scripts/update_pages.py"
+  }
+}

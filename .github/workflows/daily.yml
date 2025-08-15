@@ -1,0 +1,101 @@
+name: daily-release
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  issues: read
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare inputs
+        run: |
+          mkdir -p tmp dist
+          echo "### recent commits" > tmp/commits.txt
+          git log -n 10 --pretty=format:"%h %s" >> tmp/commits.txt || true
+          echo "### inspirations (last 10)" > tmp/inspirations.txt
+          gh api repos/${{ github.repository }}/issues -f state=open -f labels=inspiration -f per_page=10 -q '.[] | "- \""+.title+"\""' >> tmp/inspirations.txt || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python deps
+        run: pip install pillow
+
+      - name: Generate release (HTML + README)
+        run: npm run generate
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      - name: Read title from readme
+        id: meta
+        run: |
+          DATE=$(date -u +"%Y%m%d")
+          TITLE=$(head -n 1 dist/readme-${DATE}.txt)
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
+          echo "title=${TITLE}" >> $GITHUB_OUTPUT
+          echo "seq=$(gh release list --limit 200 | wc -l | awk '{print $1+1}')" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compose cover
+        run: npm run cover -- $(echo "${{ steps.meta.outputs.date }}") "$(echo "${{ steps.meta.outputs.title }}")"
+      - name: Create aliases by seq
+        run: |
+          cp "dist/demo-${{ steps.meta.outputs.date }}.html" "dist/demo-${{ steps.meta.outputs.seq }}.html"
+          cp "dist/cover-${{ steps.meta.outputs.date }}.png" "dist/cover-${{ steps.meta.outputs.seq }}.png"
+          cp "dist/readme-${{ steps.meta.outputs.date }}.txt" "dist/readme-${{ steps.meta.outputs.seq }}.txt"
+      - name: Create release ZIP
+        run: |
+          DATE="${{ steps.meta.outputs.date }}"
+          SEQ="${{ steps.meta.outputs.seq }}"
+          mkdir -p bundle
+          # Кладём и по дате, и по порядковому номеру — внутри релиза будет один ZIP
+          cp "dist/demo-${DATE}.html"     "bundle/demo-${DATE}.html"
+          cp "dist/cover-${DATE}.png"     "bundle/cover-${DATE}.png"
+          cp "dist/readme-${DATE}.txt"    "bundle/readme-${DATE}.txt"
+          cp "dist/demo-${SEQ}.html"      "bundle/demo-${SEQ}.html"
+          cp "dist/cover-${SEQ}.png"      "bundle/cover-${SEQ}.png"
+          cp "dist/readme-${SEQ}.txt"     "bundle/readme-${SEQ}.txt"
+          (cd bundle && zip -9 -r "../jsdemo-${DATE}.zip" .)
+          ls -l "jsdemo-${DATE}.zip"
+
+      - name: Create Git tag & Release (ZIP only)
+        run: |
+          DATE=${{ steps.meta.outputs.date }}
+          TITLE="${{ steps.meta.outputs.title }}"
+          gh release create "${DATE}" \
+            --title "${TITLE}" \
+            "jsdemo-${DATE}.zip#jsdemo-${DATE}.zip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+      - name: Update Pages tree
+        run: |
+          python3 scripts/update_pages.py "${{ steps.meta.outputs.date }}" "${{ steps.meta.outputs.seq }}" "${{ steps.meta.outputs.title }}"
+      - name: Commit & push Pages
+        run: |
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "pages: add ${{ steps.meta.outputs.date }} (seq ${{ steps.meta.outputs.seq }})" || echo "No changes"
+          git push

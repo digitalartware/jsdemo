@@ -1,0 +1,25 @@
+name: auto-close-stale-inspirations
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  close_stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close inspirations inactive for 30+ days
+        run: |
+          CUTOFF=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh api repos/${{ github.repository }}/issues -f state=open -f labels=inspiration -q '.[] | [.number,.updated_at] | @tsv'           | while IFS=$'\t' read -r num updated; do
+              if [[ "$updated" < "$CUTOFF" ]]; then
+                gh issue comment "$num" --body "Auto-closing as stale: no activity for 30+ days. Feel free to reopen or create a new inspiration."
+                gh issue close "$num"
+              fi
+            done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,108 @@
+name: post-to-telegram
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to post (YYYYMMDD)"
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets (gate)
+        id: gate
+        run: |
+          if [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] || [ -z "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Exit if secrets missing
+        if: steps.gate.outputs.skip == 'true'
+        run: |
+          echo "Skipping Telegram: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set."
+          exit 0
+
+      - name: Determine tag
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release ZIP
+        run: |
+          mkdir -p assets
+          gh release download "${{ steps.pick.outputs.tag }}" -p "jsdemo-${{ steps.pick.outputs.tag }}.zip" -D assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unzip assets
+        run: |
+          cd assets
+          unzip -o "jsdemo-${{ steps.pick.outputs.tag }}.zip"
+          ls -la
+
+      - name: Post cover to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.pick.outputs.tag }}"
+          TITLE="$(gh release view "$TAG" --json name --jq .name)"
+
+          RID="${TELEGRAM_CHAT_ID}"
+          if [[ "$RID" == @* ]]; then
+            RESP="$(curl -sS --fail "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChat?chat_id=${RID}")"
+            RID="$(jq -r '.result.id' <<<"$RESP")"
+          fi
+
+          if [[ -f "assets/readme-${TAG}.txt" ]]; then
+            DESC="$(awk '
+              BEGIN{s=0}
+              tolower($0) ~ /^description:/ {s=1; next}
+              s==1 && (tolower($0) ~ /^to_next/ || tolower($0) ~ /^cover/ || $0 ~ /^$/){exit}
+              s==1 {print}
+            ' "assets/readme-${TAG}.txt" | tr -d '\r')"
+          else
+            DESC=""
+          fi
+
+          esc() {
+            printf "%s" "$1" \
+              | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g' \
+              | sed "s/'/\&#39;/g"
+          }
+          TITLE_ESC="$(esc "$TITLE")"
+          DESC_ESC="$(esc "$DESC")"
+
+          SEQ="$(ls assets | sed -n 's/^demo-\([0-9][0-9]*\)\.html$/\1/p' | grep -v "$TAG" | head -n1 || echo "")"
+
+          CAPTION="<b>${SEQ}: ${TITLE_ESC}</b>"
+          if [[ -n "$DESC_ESC" ]]; then
+            CAPTION="${CAPTION}"$'\n\n'"${DESC_ESC}"
+          fi
+          CAPTION="${CAPTION}"$'\n\n'"<a href=\"https://digitalartware.github.io/jsdemo/releases/date/${TAG}\">View</a>"
+
+          # trim to ~1000 to be safe
+          if (( ${#CAPTION} > 1000 )); then
+            CAPTION="$(printf '%s' "$CAPTION" | head -c 1000) …"
+          fi
+
+          curl -sS --fail-with-body -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            --form "chat_id=${RID}" \
+            --form "photo=@assets/cover-${TAG}.png;type=image/png" \
+            --form "parse_mode=HTML" \
+            --form-string "caption=${CAPTION}"
