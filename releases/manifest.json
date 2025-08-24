@@ -1,5 +1,11 @@
 [
   {
+    "date": "20250824",
+    "seq": "10",
+    "title": "Chromatic Echo",
+    "desc": "Fallback demo: colorful orbits with gentle motion (Canvas, no deps)."
+  },
+  {
     "date": "20250823",
     "seq": "9",
     "title": "Chromatic Echo",
